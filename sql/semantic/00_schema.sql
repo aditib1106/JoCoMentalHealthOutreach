@@ -1,0 +1,3 @@
+\set ON_ERROR_STOP on
+SET ROLE jail_mh2;
+CREATE SCHEMA IF NOT EXISTS semantic;
