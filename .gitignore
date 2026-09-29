@@ -1,0 +1,19 @@
+# editor / env
+.vscode/
+__pycache__/
+*.pyc
+.python-version
+
+# credentials -- never commit
+.pgpass
+*.env
+
+# data never leaves the server
+*.csv
+*.parquet
+*.pkl
+output/
+
+# office files
+*.docx
+*.pptx
