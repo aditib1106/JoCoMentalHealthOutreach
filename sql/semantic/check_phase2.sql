@@ -43,7 +43,8 @@ FROM semantic.person_xwalk
 WHERE n_entity_ids > 1
 GROUP BY 1, 2 ORDER BY 1, 2;
 
-\echo '=== G. Mental health rows still ambiguous among jail people ==='
-SELECT 'services' AS tbl, sum((resolution = 'ambiguous_multi_jail')::int) AS still_ambiguous_rows, count(*) AS rows FROM semantic.jcmhc_services
-UNION ALL SELECT 'calls',     sum((resolution = 'ambiguous_multi_jail')::int), count(*) FROM semantic.jcmhc_calls
-UNION ALL SELECT 'diagnoses', sum((resolution = 'ambiguous_multi_jail')::int), count(*) FROM semantic.jcmhc_diagnoses;
+\echo '=== G. Rows not linked because the source id is ambiguous ==='
+SELECT 'services' AS tbl, sum((resolution = 'ambiguous_excluded')::int) AS ambiguous_rows,
+       sum((entity_id IS NULL)::int) AS unlinked_rows, count(*) AS rows FROM semantic.jcmhc_services
+UNION ALL SELECT 'calls',     sum((resolution = 'ambiguous_excluded')::int), sum((entity_id IS NULL)::int), count(*) FROM semantic.jcmhc_calls
+UNION ALL SELECT 'diagnoses', sum((resolution = 'ambiguous_excluded')::int), sum((entity_id IS NULL)::int), count(*) FROM semantic.jcmhc_diagnoses;
