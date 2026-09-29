@@ -1,46 +1,80 @@
-# JoCo Mental Health Center
+# Jail MH 2: Proactive mental health outreach (Project Update 1)
 
-## The Organization
-[Johnson County](https://www.jocogov.org/) (JoCo) is the most populous county in the state of Kansas, primarily consisting of the suburbs of Kansas City, MO. The county's Mental Health Center (MHC) provides a variety of services, including counseling, crisis help lines, inpatient care, criminal justice co-responders, and a mobile crisis response team (MCRT) that does outreach in the community.
+**Question.** Each month, which 100 people, flagged for mental health need in the Johnson County
+jail but not in mental health care, should the Johnson County Mental Health Center (JCMHC) contact?
 
+This branch contains everything needed to reproduce our Update 1 numbers. Run the two steps in order.
+(The course's original project description is in `PROJECT_DESCRIPTION.md`.)
 
-## The Problem
-Untreated mental health conditions often result in a negative spiral, which can culminate in repeated periods of incarceration with long term consequences both for the affected individual and the community as a whole. Surveys of inmate populations have suggested a high prevalence of multiple and complex needs, with 64% of people in local jails suffering from mental health issues and 55% meeting criteria for substance abuse or dependence, and three times as many individuals with serious mental illness housed in jails and prisons as hospitals. Despite these high levels of need, the criminal justice system is poorly suited to address them, contributing to a worsening of this spiral. Johnson County's Mental Health Center currently seeks to identify individuals with behavioral health needs in this population by screening people who enter the county jail.
+## Repository layout (in order of execution)
 
+| Order | Folder / file | What it does | Time |
+|---|---|---|---|
+| 1 | `step1_build_data/00_schema.sql` … `13_outreach.sql` | Builds clean, person-linked tables in schema `semantic` from the county tables | ~10 min |
+| 1 | `step1_build_data/14_check_bookings.sql`, `15_check_other_tables.sql` | Validation checks (aggregates only) | ~1 min |
+| 2 | `step2_update1_baselines/1_baselines_three_dates.sql` | Slide 4: cohort, base rate, baselines for 1 Apr, 1 May, 1 Jun 2018 | ~3–5 min |
+| 2 | `step2_update1_baselines/2_baselines_18_month_avg.sql` | Slide 4 last row: same, every month Jan 2017 – Jun 2018, averaged | ~15–25 min |
+| 2 | `step2_update1_baselines/3_sensitivity_checks.sh` | Slide 5: outcome window 3/6/9/12 months; release look-back 12 months/2/3 years | ~25–30 min |
 
-## Goals and Interventions
-The JoCo MHC hopes break this cycle of incarceration by identifying individuals who might benefit from outreach with mental health resources and are at risk for future incarceration. While the center currently provides services to the jail population, needs are generally identified reactively, for instance through screening instruments individuals fill out when entering jail. The new program being developed will supplement these existing approaches with proactive outreach by case workers, with the hope that individuals can be provided with care before a crisis develops that results in a return to jail. However, they only have limited resources for this new proactive outreach effort and estimate that their current level of budget and staffing will only allow them to attempt to contact 100 individuals each month.
+## How to reproduce
 
+Requirements: class server account, `psql`, database password in `~/.pgpass`. Run from the repository root.
 
-## The Data
-Through our partnership, the county provided administrative data from their mental health center, jail system, police arrests, and ambulance runs, which have been loaded into a database for your project. In the database, the table `raw.jocojococlient` contains information matching records across different systems (done by JoCo). The `joid` column provides the resulting match id, while `source` indicates the system and column the record came from. The `sourceid` or `hash_sourceid` column provides the join key back into each system. Note that only one may be populated depending on the data type and nature of the key.
+```bash
+DB="-h database.mlpolicylab.dssg.io -U <andrew id> -d johnson_county_ddj_jail_mh2"
 
-Johnson County has provided data from several systems:
-- **JCDHE**: Johnson County Department of Health encounter data
-- **KDOC**: Kansas Dept. of Corrections (state-level), including some probation data
-- **AIMS**: Automated Information Mapping System: public jail booking information
-- **JIMS**: Justice Information Management System: County-level jail and inmate information
-- **MEDACT**: First responder data, including ambulance runs
-- **JCMHC**: Johnson County Mental Health Center data
-- **PD**: Police department arrest data
+# Step 1 (optional: the semantic schema is already built in the team database)
+for f in step1_build_data/[01][0-9]_*.sql; do psql $DB -f "$f" || break; done
 
-A number of tables have been provided with some initial data-processing and cleaning performed (in the `cleaned` schema) while several others are available in their raw form (in the `raw` schema).
+# Step 2
+psql $DB -f step2_update1_baselines/1_baselines_three_dates.sql
+psql $DB -f step2_update1_baselines/2_baselines_18_month_avg.sql
+PGUSER=<andrew id> bash step2_update1_baselines/3_sensitivity_checks.sh
+```
 
-A few notes to keep in mind as you work with the data:
-- Many tables include a `joco_resident` flag that was added later to code whether the individual associated with the record was a resident of johnson county at the time based on information associated with the record.
-- The JCMHC data contains information only about individuals who have interacted with the mental health center or one of its programs.
-- The JCDHE data includes information about several types of encounters, not just ones related to mental health.
-- In the JCDHE data, the `cosite` column indicates the location of the event: 14005 indicates Olathe (zipcode 66061) and 14012 indicates Mission (zipcode 66202)
-- Jail inmates will be given a couple of screens that provide information on mental health status:
-    - The ["Brief Jail Mental Health Screen" (BJMHS)](https://www.prainc.com/wp-content/uploads/2015/10/bjmhsform.pdf), which has 8 questions. Data is in `cleaned.jocojimsinmatedata` as columns `mhs1`-`mhs8`, as well as `mhs_total` and `bjmhs_referred` to indicate whether the inmate was referred to JCMHC for mental health servises on the basis of the results.
-    - The "Level of Service Inventory - Revised" (LSI-R), a 54-item inventory across a wide range of areas relevant to risk levels and treatment needs. You can find these data in `cleaned.jims_lsir_records` and JoCo uses the following logic to assess mental health need: a value of 1 in any of `ans_37`-`ans_50` or a value of 0 in `ans_39` or `ans_40`. The total LSI-R score will be in either the `total_score` or `score` column.
-    - Additionally, the pre-trial assessment information in `cleaned.jocojimspretrialassessdata` includes `assessment_mh_flag` and `substance_flag` columns to indicate whether a mental health need or substance abuse issue was identified at the time of the assessment.
-- In the MED-ACT data, you'll find text columns indicating the complaint that led to the response (`chiefcomplaint`) as well as the impressions of the first responders (`primaryimpression` and `secondaryimpression`)
-- There are several datetime columns in the MEDACT data incidating several steps in the process of the ambulance run.
+Self-checks: in `1_baselines_three_dates.sql`, section 1 shows cohorts of 4,392 / 4,462 / 4,526 and
+section 3's `list_size_check` is 100.0 on every row. Nothing writes to the database except step 1
+(schema `semantic`); step 2 uses temporary tables only and prints aggregates only.
 
+## Formulation
 
-### A few other resouces
-- [Adult Criminal Process in Johnson County](joco_docs/joco_crimpro.pdf)
-- [Some Acronyms](joco_docs/joco_acronyms.pdf)
-- [JCMHC services overview](joco_docs/joco_services.pdf)
+> Every month, for people released from the Johnson County jail in the past 12 months who are not in
+> jail on the 1st, were flagged for mental health need by a jail assessment (booking screen, pretrial
+> assessment or LSI-R), and have had no JCMHC service in the past 90 days, identify the 100 people most
+> likely to be booked into jail for a new arrest within the next 12 months, so JCMHC can offer them
+> proactive outreach before a crisis.
 
+- **Ranking date:** 1st of each month. **List size:** 100 (JCMHC's monthly capacity).
+- **Need flag:** positive jail mental health screen, pretrial mental health flag, or LSI-R need under
+  the county's rule (1 on items 37–50, or 0 on items 39/40).
+- **Outcome:** jail booking for a new arrest (types VIEW, WARR, BW) within 12 months.
+- **Data lag:** inputs use only records dated at least 7 days before the ranking date.
+- **Prior:** a random 100 from the cohort (expected precision = base rate).
+- **B1:** highest jail mental health screen score at the most recent screened booking.
+- **B2:** highest latest LSI-R total score; people without one next, by pretrial risk level.
+- **Ties:** broken by most recent release; remaining ties share the last places equally (exact expected value).
+- **Precision at 100:** share of the 100 listed with the outcome.
+
+## Results (new-arrest outcome)
+
+| Ranking date | Cohort | Base rate | B1 | B2 |
+|---|---|---|---|---|
+| 1 Apr 2018 | 4,392 | 25.5% | 29% | 30% |
+| 1 May 2018 | 4,462 | 25.8% | 23% | 28% |
+| 1 Jun 2018 | 4,526 | 25.6% | 24% | 27% |
+| 18-month average (Jan 2017 – Jun 2018) | ~3,790 | 26.9% | 29.4% | 31.7% |
+
+The county's existing tools select only 1.1–1.2× as many future re-arrests as random.
+
+## Data decisions (all verified on the database)
+- Jail bookings are stored twice in the source; `semantic.bookings` has one row per booking.
+- Jail ids are zero-padded to 9 characters to match the county crosswalk.
+- Ids the county matched to more than one person are linked to nobody (about 12% of mental health
+  service rows). We do not guess, because a wrong link could make someone look already in care.
+- Mental health services come from the cleaned table (= raw with exact duplicates removed); health
+  department data from raw (the cleaned table is exactly doubled).
+- Jail booking data are complete through June 2019, so 1 Jun 2018 is the latest ranking date with a
+  full 12-month outcome window. The jail screen covers 89–95% of bookings from 2017.
+- Remote county tables have no planner statistics: for ad-hoc queries run `SET enable_nestloop = off;`.
+
+No data or query output is stored in this repository.
