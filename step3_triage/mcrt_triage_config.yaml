@@ -1,0 +1,115 @@
+config_version: 'v8'
+
+model_comment: 'update2-config-a'
+random_seed: 23895478
+
+temporal_config:
+  feature_start_time: '2000-01-01'
+  feature_end_time: '2019-05-01'
+  label_start_time: '2017-01-01'
+  label_end_time: '2019-05-01'
+  model_update_frequency: '100year'
+  training_as_of_date_frequencies: ['1day']
+  test_as_of_date_frequencies: ['1day']
+  max_training_histories: ['0day']
+  test_durations: ['0day']
+  label_timespans: ['1year']
+
+label_config:
+  name: 'new_arrest_1y'
+  query: |
+    WITH released_not_in_jail AS (
+      SELECT b.entity_id
+      FROM semantic.bookings b
+      WHERE b.booking_date < '{as_of_date}'::date
+        AND b.entity_id IS NOT NULL
+      GROUP BY b.entity_id
+      HAVING max(b.release_date) FILTER (WHERE b.release_date < '{as_of_date}'::date)
+               >= '{as_of_date}'::date - interval '12 months'
+         AND NOT bool_or(b.release_date IS NULL OR b.release_date >= '{as_of_date}'::date)
+    ),
+    jail_mh_flagged AS (
+      SELECT r.entity_id FROM released_not_in_jail r
+      WHERE EXISTS (
+              SELECT 1 FROM semantic.bookings b
+              WHERE b.entity_id = r.entity_id
+                AND b.booking_date < '{as_of_date}'::date - 7
+                AND b.bjmhs_referred = 1)
+         OR EXISTS (
+              SELECT 1 FROM semantic.pretrial p
+              WHERE p.entity_id = r.entity_id
+                AND p.create_date < '{as_of_date}'::date - 7
+                AND p.assessment_mh_flag = 1)
+         OR EXISTS (
+              SELECT 1 FROM semantic.lsir l
+              WHERE l.entity_id = r.entity_id
+                AND GREATEST(l.assessment_date, l.created_date) < '{as_of_date}'::date - 7
+                AND (1 IN (l.ans_37,l.ans_38,l.ans_39,l.ans_40,l.ans_41,l.ans_42,l.ans_43,
+                           l.ans_44,l.ans_45,l.ans_46,l.ans_47,l.ans_48,l.ans_49,l.ans_50)
+                     OR l.ans_39 = 0 OR l.ans_40 = 0))
+    ),
+    cohort AS (
+      SELECT f.entity_id FROM jail_mh_flagged f
+      WHERE NOT EXISTS (
+        SELECT 1 FROM semantic.jcmhc_services s
+        WHERE s.entity_id = f.entity_id
+          AND s.svc_date >= '{as_of_date}'::date - 7 - 90
+          AND s.svc_date <  '{as_of_date}'::date - 7)
+    )
+    SELECT c.entity_id,
+           CASE WHEN EXISTS (
+             SELECT 1
+             FROM semantic.bookings b
+             JOIN semantic.booking_types t USING (booking_no)
+             WHERE b.entity_id = c.entity_id
+               AND b.booking_date >= '{as_of_date}'::date
+               AND b.booking_date <  '{as_of_date}'::date + interval '{label_timespan}'
+               AND t.book_types && ARRAY['VIEW','WARR','BW']
+           ) THEN 1 ELSE 0 END AS outcome
+    FROM cohort c
+
+feature_aggregations:
+  -
+    prefix: 'bkgs'
+    from_obj: |
+      (SELECT c.joid::INT AS entity_id,
+             i.booking_date AS knowledge_date,
+             age
+      FROM cleaned.jocojimsinmatedata i
+      JOIN raw.jocojococlient c
+          ON c.source = 'jocoJIMSNameIndex.MNI_NO_0'
+          AND c.sourceid::INT = i.mni_no::INT) AS bookings
+    knowledge_date_column: 'knowledge_date'
+    aggregates_imputation:
+      all:
+        type: 'constant'
+        value: 0
+    aggregates:
+      -
+        quantity:
+          prior: '*'
+        metrics:
+          - 'count'
+    intervals:
+      - '1 year'
+      - '5 years'
+      - 'all'
+
+scoring:
+  testing_metric_groups:
+    -
+      metrics: ['precision@', 'recall@']
+      thresholds:
+        top_n: [50, 100, 200]
+        percentiles: [1, 5, 10, 25]
+  training_metric_groups:
+    -
+      metrics: ['precision@', 'recall@']
+      thresholds:
+        top_n: [100]
+
+individual_importance:
+  methods: []
+  n_ranks: 5
+
+model_grid_preset: 'quickstart'
