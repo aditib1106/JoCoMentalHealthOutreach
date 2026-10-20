@@ -48,7 +48,6 @@ section 3's `list_size_check` is 100.0 on every row. Nothing writes to the datab
 - **Need flag:** positive jail mental health screen, pretrial mental health flag, or LSI-R need under
   the county's rule (1 on items 37–50, or 0 on items 39/40).
 - **Outcome:** jail booking for a new arrest (types VIEW, WARR, BW) within 12 months.
-- **Data lag:** assessment and JCMHC records must be dated at least 7 days before the ranking date; jail bookings and releases are used as of the ranking date.
 - **Prior:** a random 100 from the cohort (expected precision = base rate).
 - **B1:** highest jail mental health screen score at the most recent screened booking.
 - **B2:** highest latest LSI-R total score; people without one next, by pretrial risk level.

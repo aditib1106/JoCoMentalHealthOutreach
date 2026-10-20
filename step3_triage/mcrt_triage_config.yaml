@@ -1,6 +1,6 @@
 config_version: 'v8'
 
-model_comment: 'update2-config-a'
+model_comment: 'fixes-config-a'
 random_seed: 23895478
 
 temporal_config:
@@ -15,12 +15,37 @@ temporal_config:
   test_durations: ['0day']
   label_timespans: ['1year']
 
+# ----------------------------------------------------------------------------
+# label_config
+#
+# Reads from the semantic_v2 schema built on branch jail-mh2-fixes. The query
+# implements Configuration A, cohort + outcome, with the following per-filter
+# traceability to the Update 1 formulation sentence. Each CTE below is named
+# so a TA can match it to the slide line it enforces.
+#
+# Formulation sentence (Update 1, slide 2):
+#   "Every month, for people released from the Johnson County jail in the past
+#    12 months who are not in jail on the 1st, were flagged for mental health
+#    need by a jail assessment (booking screen, pretrial assessment or LSI-R)
+#    and have had no JCMHC service in the past 90 days, can we identify the
+#    top 100 at highest risk of a new-arrest booking within the next 12
+#    months, so JCMHC can prioritize proactive mental health outreach?"
+#
+# Change from the Update 2 submission (branch jail-mh2-update2):
+#   * schema references switched to semantic_v2 (semantic stays frozen);
+#   * the 7-day information lag removed per the Update 2 check-in
+#     ("why seven days, why not three minutes, why not three months");
+#     service / assessment windows now use as_of_date directly;
+#   * CTE names expanded and per-filter spec quotes added.
+# ----------------------------------------------------------------------------
 label_config:
   name: 'new_arrest_1y'
   query: |
-    WITH released_not_in_jail AS (
+    -- Formulation: "released from the Johnson County jail in the past 12
+    -- months who are not in jail on the 1st"
+    WITH released_in_past_12m_and_not_in_jail AS (
       SELECT b.entity_id
-      FROM semantic.bookings b
+      FROM semantic_v2.bookings b
       WHERE b.booking_date < '{as_of_date}'::date
         AND b.entity_id IS NOT NULL
       GROUP BY b.entity_id
@@ -28,46 +53,65 @@ label_config:
                >= '{as_of_date}'::date - interval '12 months'
          AND NOT bool_or(b.release_date IS NULL OR b.release_date >= '{as_of_date}'::date)
     ),
-    jail_mh_flagged AS (
-      SELECT r.entity_id FROM released_not_in_jail r
+
+    -- Formulation: "flagged for mental health need by a jail assessment
+    -- (booking screen, pretrial assessment or LSI-R)"
+    -- The 7-day lag that previously guarded each assessment-side timestamp
+    -- has been deleted; windows end at as_of_date directly.
+    flagged_mh_by_jail_assessment AS (
+      SELECT r.entity_id FROM released_in_past_12m_and_not_in_jail r
       WHERE EXISTS (
-              SELECT 1 FROM semantic.bookings b
+              -- jail mental health screen referral
+              SELECT 1 FROM semantic_v2.bookings b
               WHERE b.entity_id = r.entity_id
-                AND b.booking_date < '{as_of_date}'::date - 7
+                AND b.booking_date < '{as_of_date}'::date
                 AND b.bjmhs_referred = 1)
          OR EXISTS (
-              SELECT 1 FROM semantic.pretrial p
+              -- pretrial assessment mental health flag
+              SELECT 1 FROM semantic_v2.pretrial p
               WHERE p.entity_id = r.entity_id
-                AND p.create_date < '{as_of_date}'::date - 7
+                AND p.create_date < '{as_of_date}'::date
                 AND p.assessment_mh_flag = 1)
          OR EXISTS (
-              SELECT 1 FROM semantic.lsir l
+              -- LSI-R mental health need per the county's rule
+              -- (any item 37-50 answered 1, or items 39/40 answered 0)
+              SELECT 1 FROM semantic_v2.lsir l
               WHERE l.entity_id = r.entity_id
-                AND GREATEST(l.assessment_date, l.created_date) < '{as_of_date}'::date - 7
+                AND GREATEST(l.assessment_date, l.created_date) < '{as_of_date}'::date
                 AND (1 IN (l.ans_37,l.ans_38,l.ans_39,l.ans_40,l.ans_41,l.ans_42,l.ans_43,
                            l.ans_44,l.ans_45,l.ans_46,l.ans_47,l.ans_48,l.ans_49,l.ans_50)
                      OR l.ans_39 = 0 OR l.ans_40 = 0))
     ),
-    cohort AS (
-      SELECT f.entity_id FROM jail_mh_flagged f
+
+    -- Formulation: "have had no JCMHC service in the past 90 days"
+    -- Window: [as_of_date - 90 days, as_of_date). No 7-day lag.
+    cohort_no_jcmhc_service_90d AS (
+      SELECT f.entity_id FROM flagged_mh_by_jail_assessment f
       WHERE NOT EXISTS (
-        SELECT 1 FROM semantic.jcmhc_services s
+        SELECT 1 FROM semantic_v2.jcmhc_services s
         WHERE s.entity_id = f.entity_id
-          AND s.svc_date >= '{as_of_date}'::date - 7 - 90
-          AND s.svc_date <  '{as_of_date}'::date - 7)
+          AND s.svc_date >= '{as_of_date}'::date - 90
+          AND s.svc_date <  '{as_of_date}'::date)
     )
+
+    -- Formulation: outcome is a "new-arrest booking within the next 12
+    -- months". A new-arrest booking means at least one of the booking's
+    -- charges carries type VIEW (on-view arrest), WARR (arrest warrant),
+    -- or BW (bench warrant). label_timespan is substituted by triage.
     SELECT c.entity_id,
            CASE WHEN EXISTS (
              SELECT 1
-             FROM semantic.bookings b
-             JOIN semantic.booking_types t USING (booking_no)
+             FROM semantic_v2.bookings b
+             JOIN semantic_v2.booking_types t USING (booking_no)
              WHERE b.entity_id = c.entity_id
                AND b.booking_date >= '{as_of_date}'::date
                AND b.booking_date <  '{as_of_date}'::date + interval '{label_timespan}'
                AND t.book_types && ARRAY['VIEW','WARR','BW']
            ) THEN 1 ELSE 0 END AS outcome
-    FROM cohort c
+    FROM cohort_no_jcmhc_service_90d c
 
+# feature_aggregations: left as the course skeleton so this file stays within
+# the "edit only label_config and scoring" scope of Update 2.
 feature_aggregations:
   -
     prefix: 'bkgs'

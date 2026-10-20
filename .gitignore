@@ -1,0 +1,6 @@
+# Triage outputs: person-level matrices and model artefacts.
+# Must never be committed. Store under /class/groups/jail_mh2/triage_runs_v2/
+triage_output/
+triage_output_jail_mh2/
+run_stdout.log
+triage.log
