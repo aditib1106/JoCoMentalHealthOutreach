@@ -150,7 +150,6 @@ feature_aggregations:
     intervals: ['3years', 'all']
     groups: ['entity_id']
 
-model_grid_preset: 'quickstart'
 
 scoring:
   testing_metric_groups:
@@ -166,3 +165,12 @@ scoring:
 individual_importance:
   methods: []
   n_ranks: 1
+
+grid_config:
+  'sklearn.dummy.DummyClassifier':
+    strategy: ['prior']
+  'triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature':
+    rules:
+      - [{feature: 'jail_entity_id_all_mhs_total_max', low_value_high_score: False}]
+      - [{feature: 'risk_entity_id_all_lsir_score_max', low_value_high_score: False},
+         {feature: 'risk_entity_id_all_pretrial_risk_max', low_value_high_score: False}]
