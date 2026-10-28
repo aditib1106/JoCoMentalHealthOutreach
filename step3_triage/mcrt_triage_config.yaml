@@ -7,7 +7,7 @@ temporal_config:
   feature_end_time: '2019-06-01'
   label_start_time: '2015-01-01'
   label_end_time: '2019-06-01'
-  model_update_frequency: '3months'
+  model_update_frequency: '1month'
   training_as_of_date_frequencies: ['1month']
   test_as_of_date_frequencies: ['1month']
   max_training_histories: ['20year']
