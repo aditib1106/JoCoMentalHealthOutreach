@@ -17,6 +17,7 @@ temporal_config:
 label_config:
   name: 'new_arrest_12m'
   query: |
+    -- update4 baselines run (new labels table)
     WITH released AS (
       SELECT b.entity_id
       FROM semantic.bookings b
