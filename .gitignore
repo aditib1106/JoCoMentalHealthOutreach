@@ -4,3 +4,9 @@ triage_output/
 triage_output_jail_mh2/
 run_stdout.log
 triage.log
+step3_triage/*.bak
+
+step3_triage/u5_run.log
+
+step3_triage/u5_results_raw.csv
+

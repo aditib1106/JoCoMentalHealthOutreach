@@ -1,7 +1,18 @@
+# ===================================================================
+# Jail MH 2  Project Update 5 config
+# Base: update4-baselines/step3_triage/mcrt_triage_config.yaml
+# U5 changes: deliberate imputation, 2 new baselines, 5 new features,
+#             small model grid inlined for v0 ML runs.
+# ===================================================================
+
 config_version: 'v8'
-model_comment: 'jail_mh2_update1_formulation'
+model_comment: 'jail_mh2_update5_v0_models'   # [U5] identifies this run in triage_metadata.models
 random_seed: 23895478
 
+
+# ---------- TEMPORAL CONFIG ----------
+# Monthly walk forward splits, same as Update 4.
+# 42 as of dates, 30 train/val pairs, 1 year label horizon.
 temporal_config:
   feature_start_time: '2000-01-01'
   feature_end_time: '2019-06-01'
@@ -14,10 +25,15 @@ temporal_config:
   test_durations: ['0day']
   label_timespans: ['1year']
 
+
+# ---------- LABEL CONFIG ----------
+# Cohort: released within past 12 months, not currently in jail,
+#         jail side MH flag, not actively engaged with JCMHC.
+# Label: new arrest booking (VIEW/WARR/BW) within 12 months of as_of_date.
+# Unchanged from Update 4.
 label_config:
   name: 'new_arrest_12m'
   query: |
-    -- update4 baselines run (new labels table)
     WITH released AS (
       SELECT b.entity_id
       FROM semantic.bookings b
@@ -55,18 +71,44 @@ label_config:
            THEN 1 ELSE 0 END AS outcome
     FROM cohort c
 
+
+# ---------- FEATURE AGGREGATIONS ----------
 feature_aggregations:
+
+  # ===== JAIL block =====
+  # Source: semantic.bookings. One row per booking event.
+  # [U5] from_obj rewritten: LAG for prev_gap_days, JOIN booking_types
+  #      for is_new_arrest flag, exposes birth_year for age proxy.
   -
     prefix: 'jail'
     from_obj: |
-      (SELECT entity_id, booking_date AS knowledge_date,
-              coalesce(bjmhs_referred, 0) AS screen_referred, mhs_total,
-              (release_date - booking_date) AS stay_days
-       FROM semantic.bookings WHERE entity_id IS NOT NULL) AS jail
+      (SELECT b.entity_id,
+              b.booking_date AS knowledge_date,
+              coalesce(b.bjmhs_referred, 0) AS screen_referred,
+              b.mhs_total,
+              (b.release_date - b.booking_date) AS stay_days,
+              -- [U5] Gap in days from previous booking (NULL on first per entity).
+              -- Addresses prof feedback "sequence of visits, min intervals".
+              (b.booking_date - LAG(b.booking_date)
+                   OVER (PARTITION BY b.entity_id ORDER BY b.booking_date))::int AS prev_gap_days,
+              -- [U5] 1 if this booking matches the label event types (new arrest).
+              -- Lets us build a baseline that ranks on prior same type events.
+              CASE WHEN t.book_types && ARRAY['VIEW','WARR','BW'] THEN 1 ELSE 0 END AS is_new_arrest,
+              -- [U5] birth_year is constant per entity; MAX gives the year itself.
+              b.birth_year
+       FROM semantic.bookings b
+       LEFT JOIN semantic.booking_types t USING (booking_no)
+       WHERE b.entity_id IS NOT NULL) AS jail
     knowledge_date_column: 'knowledge_date'
+    # [U5] Per metric imputation. Moves away from blanket 'zero'.
+    # count/sum: zero_noflag  (no events really is 0, no flag needed)
+    # max/min/avg of scores: 'mean'  (missing != 0; triage auto emits *_imp flag)
     aggregates_imputation:
-      all:
-        type: 'zero'
+      count: {type: 'zero_noflag'}
+      sum:   {type: 'zero_noflag'}
+      max:   {type: 'mean'}
+      min:   {type: 'mean'}
+      avg:   {type: 'mean'}
     aggregates:
       - quantity: {bookings: '*'}
         metrics: ['count']
@@ -76,19 +118,60 @@ feature_aggregations:
         metrics: ['max']
       - quantity: 'stay_days'
         metrics: ['sum', 'max']
+      # [U5] New aggregate. Count of prior same type events.
+      - quantity: 'is_new_arrest'
+        metrics: ['sum', 'max']
+      # [U5] New aggregate. "Was last booking cycle short" style signal.
+      # Override imputation: a huge constant preserves monotonicity for folks
+      # with only one booking, and the auto _imp flag tells the model.
+      - quantity: 'prev_gap_days'
+        metrics: ['min', 'avg']
+        imputation:
+          min: {type: 'constant', value: 99999}
+          avg: {type: 'constant', value: 99999}
+      # [U5] Age proxy. birth_year is constant per entity; MAX returns it.
+      - quantity: 'birth_year'
+        metrics: ['max']
+      # Days since last booking. KEY FIX from U4: constant 99999 not 0.
+      # Zero means "today", which is the opposite of "never seen".
+      - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
+        metrics: ['min']
+        imputation:
+          min: {type: 'constant', value: 99999}
+    # [U5] Added '6months' for recency signal.
+    intervals: ['6months', '1year', '3years', 'all']
+    groups: ['entity_id']
+
+  # [U5] NEW BLOCK. Days since last COMPLETED RELEASE.
+  # Jail1 team priority high. Complements days_since_last_booking.
+  -
+    prefix: 'jailrel'
+    from_obj: |
+      (SELECT entity_id, release_date AS knowledge_date
+       FROM semantic.bookings
+       WHERE entity_id IS NOT NULL AND release_date IS NOT NULL) AS jailrel
+    knowledge_date_column: 'knowledge_date'
+    aggregates_imputation:
+      min: {type: 'constant', value: 99999}
+    aggregates:
       - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
         metrics: ['min']
     intervals: ['1year', '3years', 'all']
     groups: ['entity_id']
+
+  # ===== JCMHC SERVICES block =====
+  # Volume of recent engagement with services (even though cohort excludes
+  # very recent service, longer term history is still informative).
   -
     prefix: 'mhsvc'
     from_obj: |
       (SELECT entity_id, svc_date AS knowledge_date FROM semantic.jcmhc_services
        WHERE entity_id IS NOT NULL AND svc_date >= '2000-01-01') AS mhsvc
     knowledge_date_column: 'knowledge_date'
+    # [U5] Per metric imputation. days_since gets large constant.
     aggregates_imputation:
-      all:
-        type: 'zero'
+      count: {type: 'zero_noflag'}
+      min:   {type: 'constant', value: 99999}
     aggregates:
       - quantity: {services: '*'}
         metrics: ['count']
@@ -96,20 +179,40 @@ feature_aggregations:
         metrics: ['min']
     intervals: ['1year', '3years', 'all']
     groups: ['entity_id']
+
+  # ===== JCMHC CALLS block =====
+  # [U5] from_obj expanded to derive crisis_call from presenting_issue.
+  # [U5] Added days_since_last_call (direct prof feedback).
   -
     prefix: 'mhcall'
     from_obj: |
-      (SELECT entity_id, call_date AS knowledge_date FROM semantic.jcmhc_calls
+      (SELECT entity_id,
+              call_date AS knowledge_date,
+              -- [U5] Rough crisis flag using presenting_issue text patterns.
+              CASE WHEN presenting_issue ILIKE ANY
+                   (ARRAY['%CRISIS%','%SUICID%','%PSYCH%','%BEHAV%','%MENTAL%','%HOMICID%'])
+                   THEN 1 ELSE 0 END AS crisis_call
+       FROM semantic.jcmhc_calls
        WHERE entity_id IS NOT NULL) AS mhcall
     knowledge_date_column: 'knowledge_date'
     aggregates_imputation:
-      all:
-        type: 'zero'
+      count: {type: 'zero_noflag'}
+      sum:   {type: 'zero_noflag'}
+      min:   {type: 'constant', value: 99999}
     aggregates:
       - quantity: {calls: '*'}
         metrics: ['count']
-    intervals: ['1year', 'all']
+      # [U5] Count of prior crisis flagged calls.
+      - quantity: 'crisis_call'
+        metrics: ['sum']
+      # [U5] Days since last call (prof feedback).
+      - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
+        metrics: ['min']
+    intervals: ['1year', '3years', 'all']
     groups: ['entity_id']
+
+  # ===== AMBULANCE RUNS block =====
+  # Volume and share of behavioral ambulance calls.
   -
     prefix: 'amb'
     from_obj: |
@@ -119,8 +222,8 @@ feature_aggregations:
        FROM semantic.ambulance_runs WHERE entity_id IS NOT NULL) AS amb
     knowledge_date_column: 'knowledge_date'
     aggregates_imputation:
-      all:
-        type: 'zero'
+      count: {type: 'zero_noflag'}
+      sum:   {type: 'zero_noflag'}
     aggregates:
       - quantity: {runs: '*'}
         metrics: ['count']
@@ -128,19 +231,46 @@ feature_aggregations:
         metrics: ['sum']
     intervals: ['1year', 'all']
     groups: ['entity_id']
+
+  # [U5] NEW BLOCK. Days since last BEHAVIORAL ambulance run.
+  # Separate block because we filter rows before aggregating.
+  -
+    prefix: 'ambbeh'
+    from_obj: |
+      (SELECT entity_id, incident_ts::date AS knowledge_date
+       FROM semantic.ambulance_runs
+       WHERE entity_id IS NOT NULL
+         AND primary_impression ILIKE ANY (ARRAY['%BEHAV%','%PSYCH%','%SUICID%'])) AS ambbeh
+    knowledge_date_column: 'knowledge_date'
+    aggregates_imputation:
+      min: {type: 'constant', value: 99999}
+    aggregates:
+      - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
+        metrics: ['min']
+    intervals: ['1year', 'all']
+    groups: ['entity_id']
+
+  # ===== RISK block (LSI R + Pretrial) =====
+  # Union of two assessment sources. LSI R rows carry score; pretrial rows carry
+  # risk level and MH flag; opposite columns are NULL in each source.
   -
     prefix: 'risk'
     from_obj: |
       (SELECT entity_id, GREATEST(assessment_date, created_date) AS knowledge_date,
-              COALESCE(total_score, score) AS lsir_score, NULL::int AS pretrial_risk, NULL::int AS pretrial_mh
-       FROM semantic.lsir WHERE entity_id IS NOT NULL AND GREATEST(assessment_date, created_date) IS NOT NULL
+              COALESCE(total_score, score) AS lsir_score,
+              NULL::int AS pretrial_risk, NULL::int AS pretrial_mh
+       FROM semantic.lsir
+       WHERE entity_id IS NOT NULL AND GREATEST(assessment_date, created_date) IS NOT NULL
        UNION ALL
        SELECT entity_id, create_date, NULL, risk_level_int, assessment_mh_flag
        FROM semantic.pretrial WHERE entity_id IS NOT NULL) AS risk
     knowledge_date_column: 'knowledge_date'
+    # [U5] KEY FIX: was 'zero'. A NULL pretrial_risk for an LSI R only person
+    # was being imputed to 0, which the Baseline 2 tiebreak then read as
+    # "lowest pretrial risk" instead of "unknown". Switching to 'mean' plus
+    # the auto _imp flag fixes that misordering.
     aggregates_imputation:
-      all:
-        type: 'zero'
+      max: {type: 'mean'}
     aggregates:
       - quantity: 'lsir_score'
         metrics: ['max']
@@ -152,6 +282,9 @@ feature_aggregations:
     groups: ['entity_id']
 
 
+# ---------- SCORING ----------
+# Primary selection metric is precision@100 (capacity = 100 per month).
+# Also log recall@ and other top n / percentile cuts for context.
 scoring:
   testing_metric_groups:
     - metrics: [precision@, recall@]
@@ -163,15 +296,58 @@ scoring:
       thresholds:
         top_n: [100]
 
+
 individual_importance:
   methods: []
   n_ranks: 1
 
+
+# ---------- MODEL GRID ----------
+# U5 scope: Dummy prior, 4 rule based baselines, and a small ML grid
+# (LR, DT, RF). Focus is correctness end to end, not performance.
 grid_config:
+
+  # Base rate. The "do nothing" floor.
   'sklearn.dummy.DummyClassifier':
     strategy: ['prior']
+
+  # Common sense baselines. All rank by a single feature (plus optional tiebreak).
   'triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature':
     rules:
+      # Baseline 1 (from U4). Highest BJMHS screen score.
       - [{feature: 'jail_entity_id_all_mhs_total_max', low_value_high_score: False}]
+      # Baseline 2 (from U4, now with corrected imputation). Highest LSI R,
+      # pretrial_risk as tiebreak.
       - [{feature: 'risk_entity_id_all_lsir_score_max', low_value_high_score: False},
          {feature: 'risk_entity_id_all_pretrial_risk_max', low_value_high_score: False}]
+      # [U5] Baseline 3 NEW. Longest cumulative time in jail. Classic criminal
+      # justice "prior involvement" proxy. Uses plain string quantity so the
+      # column name follows the pattern that already validated in U4.
+      - [{feature: 'jail_entity_id_all_stay_days_sum', low_value_high_score: False}]
+      # [U5] Baseline 4 NEW. Most prior same type (new arrest) bookings.
+      # Lets us separate "ML is smart" from "the right information wins".
+      - [{feature: 'jail_entity_id_all_is_new_arrest_sum', low_value_high_score: False}]
+
+  # Logistic regression. Triage's ScaledLogisticRegression standardizes features.
+  # Small sweep over C.
+  'triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression':
+    C: [0.01, 1]
+    penalty: ['l1']
+    solver: ['saga']
+
+  # Shallow decision trees. depth=1 is a stump (readable), depth=5 adds nonlinearity.
+  'sklearn.tree.DecisionTreeClassifier':
+    criterion: ['gini']
+    max_depth: [1, 5]
+    min_samples_split: [25]
+    min_samples_leaf: [0.025]
+
+  # One small random forest for the "small preset" minimum. Scale up later.
+  'sklearn.ensemble.RandomForestClassifier':
+    n_estimators: [50]
+    max_depth: [5]
+    max_features: ['sqrt']
+    min_samples_split: [10]
+    criterion: ['gini']
+    random_state: [2193]
+    n_jobs: [-1]

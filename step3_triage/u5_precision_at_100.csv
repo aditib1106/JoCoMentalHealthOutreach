@@ -1,0 +1,11 @@
+model_type,model_group_id,hparams,2018-04-01,2018-05-01,2018-06-01
+sklearn.dummy.DummyClassifier,9,"{""strategy"": ""prior""}",0.255,0.2653333333333333,0.264
+sklearn.ensemble.RandomForestClassifier,19,"{""criterion"": ""gini"", ""max_depth"": 5, ""max_features"": ""sqrt"", ""n_estimators"": 50, ""min_samples_split"": 10}",0.67,0.64,0.59
+sklearn.tree.DecisionTreeClassifier,16,"{""criterion"": ""gini"", ""max_depth"": 1, ""min_samples_leaf"": 0.025, ""min_samples_split"": 25}",0.43366666666666664,0.4453333333333333,0.43866666666666665
+sklearn.tree.DecisionTreeClassifier,17,"{""criterion"": ""gini"", ""max_depth"": 5, ""min_samples_leaf"": 0.025, ""min_samples_split"": 25}",0.5136666666666667,0.516,0.482
+triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature,10,"{""rules"": [{""feature"": ""jail_entity_id_all_mhs_total_max"", ""low_value_high_score"": false}]}",0.2886666666666667,0.2776666666666667,0.292
+triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature,11,"{""rules"": [{""feature"": ""risk_entity_id_all_lsir_score_max"", ""low_value_high_score"": false}, {""feature"": ""risk_entity_id_all_pretrial_risk_max"", ""low_value_high_score"": false}]}",0.313,0.303,0.30133333333333334
+triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature,12,"{""rules"": [{""feature"": ""jail_entity_id_all_stay_days_sum"", ""low_value_high_score"": false}]}",0.29,0.31,0.3
+triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature,13,"{""rules"": [{""feature"": ""jail_entity_id_all_is_new_arrest_sum"", ""low_value_high_score"": false}]}",0.39366666666666666,0.44533333333333336,0.44033333333333335
+triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression,14,"{""C"": 0.01, ""solver"": ""saga"", ""penalty"": ""l1""}",0.62,0.65,0.6
+triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression,15,"{""C"": 1, ""solver"": ""saga"", ""penalty"": ""l1""}",0.68,0.67,0.69
