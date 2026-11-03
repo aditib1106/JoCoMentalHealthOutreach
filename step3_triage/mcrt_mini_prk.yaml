@@ -1,0 +1,306 @@
+config_version: v8
+model_comment: jail_mh2_u5_mini_prk
+random_seed: 23895478
+temporal_config:
+  feature_start_time: '2000-01-01'
+  feature_end_time: '2019-06-01'
+  label_start_time: '2017-06-01'
+  label_end_time: '2019-06-01'
+  model_update_frequency: 100year
+  training_as_of_date_frequencies:
+  - 100year
+  test_as_of_date_frequencies:
+  - 100year
+  max_training_histories:
+  - 20year
+  test_durations:
+  - 0day
+  label_timespans:
+  - 1year
+label_config:
+  name: new_arrest_12m
+  query: "WITH released AS (\n  SELECT b.entity_id\n  FROM semantic.bookings b\n \
+    \ WHERE b.booking_date < '{as_of_date}'::date AND b.entity_id IS NOT NULL\n  GROUP\
+    \ BY b.entity_id\n  HAVING max(b.release_date) FILTER (WHERE b.release_date <\
+    \ '{as_of_date}'::date)\n           >= '{as_of_date}'::date - interval '12 months'\n\
+    \     AND NOT bool_or(b.release_date IS NULL OR b.release_date >= '{as_of_date}'::date)\n\
+    ),\nflagged AS (\n  SELECT r.entity_id FROM released r\n  WHERE EXISTS (SELECT\
+    \ 1 FROM semantic.bookings b WHERE b.entity_id = r.entity_id\n               \
+    \   AND b.booking_date < '{as_of_date}'::date - 7 AND b.bjmhs_referred = 1)\n\
+    \     OR EXISTS (SELECT 1 FROM semantic.pretrial p WHERE p.entity_id = r.entity_id\n\
+    \                  AND p.create_date < '{as_of_date}'::date - 7 AND p.assessment_mh_flag\
+    \ = 1)\n     OR EXISTS (SELECT 1 FROM semantic.lsir l WHERE l.entity_id = r.entity_id\n\
+    \                  AND GREATEST(l.assessment_date, l.created_date) < '{as_of_date}'::date\
+    \ - 7\n                  AND (1 IN (l.ans_37,l.ans_38,l.ans_39,l.ans_40,l.ans_41,l.ans_42,l.ans_43,\n\
+    \                             l.ans_44,l.ans_45,l.ans_46,l.ans_47,l.ans_48,l.ans_49,l.ans_50)\n\
+    \                       OR l.ans_39 = 0 OR l.ans_40 = 0))\n),\ncohort AS (\n \
+    \ SELECT f.entity_id FROM flagged f\n  WHERE NOT EXISTS (SELECT 1 FROM semantic.jcmhc_services\
+    \ s WHERE s.entity_id = f.entity_id\n                      AND s.svc_date >= '{as_of_date}'::date\
+    \ - 97\n                      AND s.svc_date <  '{as_of_date}'::date - 7)\n)\n\
+    SELECT c.entity_id,\n       CASE WHEN EXISTS (\n         SELECT 1 FROM semantic.bookings\
+    \ b JOIN semantic.booking_types t USING (booking_no)\n         WHERE b.entity_id\
+    \ = c.entity_id\n           AND b.booking_date >= '{as_of_date}'::date\n     \
+    \      AND b.booking_date <  '{as_of_date}'::date + interval '{label_timespan}'\n\
+    \           AND t.book_types && ARRAY['VIEW','WARR','BW'])\n       THEN 1 ELSE\
+    \ 0 END AS outcome\nFROM cohort c\n"
+feature_aggregations:
+- prefix: jail
+  from_obj: "(SELECT b.entity_id,\n        b.booking_date AS knowledge_date,\n   \
+    \     coalesce(b.bjmhs_referred, 0) AS screen_referred,\n        b.mhs_total,\n\
+    \        (b.release_date - b.booking_date) AS stay_days,\n        -- [U5] Gap\
+    \ in days from previous booking (NULL on first per entity).\n        -- Addresses\
+    \ prof feedback \"sequence of visits, min intervals\".\n        (b.booking_date\
+    \ - LAG(b.booking_date)\n             OVER (PARTITION BY b.entity_id ORDER BY\
+    \ b.booking_date))::int AS prev_gap_days,\n        -- [U5] 1 if this booking matches\
+    \ the label event types (new arrest).\n        -- Lets us build a baseline that\
+    \ ranks on prior same type events.\n        CASE WHEN t.book_types && ARRAY['VIEW','WARR','BW']\
+    \ THEN 1 ELSE 0 END AS is_new_arrest,\n        -- [U5] birth_year is constant\
+    \ per entity; MAX gives the year itself.\n        b.birth_year\n FROM semantic.bookings\
+    \ b\n LEFT JOIN semantic.booking_types t USING (booking_no)\n WHERE b.entity_id\
+    \ IS NOT NULL) AS jail\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    count:
+      type: zero_noflag
+    sum:
+      type: zero_noflag
+    max:
+      type: mean
+    min:
+      type: mean
+    avg:
+      type: mean
+  aggregates:
+  - quantity:
+      bookings: '*'
+    metrics:
+    - count
+  - quantity: screen_referred
+    metrics:
+    - sum
+    - max
+  - quantity: mhs_total
+    metrics:
+    - max
+  - quantity: stay_days
+    metrics:
+    - sum
+    - max
+  - quantity: is_new_arrest
+    metrics:
+    - sum
+    - max
+  - quantity: prev_gap_days
+    metrics:
+    - min
+    - avg
+    imputation:
+      min:
+        type: constant
+        value: 99999
+      avg:
+        type: constant
+        value: 99999
+  - quantity: birth_year
+    metrics:
+    - max
+  - quantity:
+      days_since: '''{collate_date}''::date - knowledge_date'
+    metrics:
+    - min
+    imputation:
+      min:
+        type: constant
+        value: 99999
+  intervals:
+  - 6months
+  - 1year
+  - 3years
+  - all
+  groups:
+  - entity_id
+- prefix: jailrel
+  from_obj: "(SELECT entity_id, release_date AS knowledge_date\n FROM semantic.bookings\n\
+    \ WHERE entity_id IS NOT NULL AND release_date IS NOT NULL) AS jailrel\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    min:
+      type: constant
+      value: 99999
+  aggregates:
+  - quantity:
+      days_since: '''{collate_date}''::date - knowledge_date'
+    metrics:
+    - min
+  intervals:
+  - 1year
+  - 3years
+  - all
+  groups:
+  - entity_id
+- prefix: mhsvc
+  from_obj: "(SELECT entity_id, svc_date AS knowledge_date FROM semantic.jcmhc_services\n\
+    \ WHERE entity_id IS NOT NULL AND svc_date >= '2000-01-01') AS mhsvc\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    count:
+      type: zero_noflag
+    min:
+      type: constant
+      value: 99999
+  aggregates:
+  - quantity:
+      services: '*'
+    metrics:
+    - count
+  - quantity:
+      days_since: '''{collate_date}''::date - knowledge_date'
+    metrics:
+    - min
+  intervals:
+  - 1year
+  - 3years
+  - all
+  groups:
+  - entity_id
+- prefix: mhcall
+  from_obj: "(SELECT entity_id,\n        call_date AS knowledge_date,\n        --\
+    \ [U5] Rough crisis flag using presenting_issue text patterns.\n        CASE WHEN\
+    \ presenting_issue ILIKE ANY\n             (ARRAY['%CRISIS%','%SUICID%','%PSYCH%','%BEHAV%','%MENTAL%','%HOMICID%'])\n\
+    \             THEN 1 ELSE 0 END AS crisis_call\n FROM semantic.jcmhc_calls\n WHERE\
+    \ entity_id IS NOT NULL) AS mhcall\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    count:
+      type: zero_noflag
+    sum:
+      type: zero_noflag
+    min:
+      type: constant
+      value: 99999
+  aggregates:
+  - quantity:
+      calls: '*'
+    metrics:
+    - count
+  - quantity: crisis_call
+    metrics:
+    - sum
+  - quantity:
+      days_since: '''{collate_date}''::date - knowledge_date'
+    metrics:
+    - min
+  intervals:
+  - 1year
+  - 3years
+  - all
+  groups:
+  - entity_id
+- prefix: amb
+  from_obj: "(SELECT entity_id, incident_ts::date AS knowledge_date,\n        CASE\
+    \ WHEN primary_impression ILIKE ANY (ARRAY['%BEHAV%','%PSYCH%','%SUICID%'])\n\
+    \             THEN 1 ELSE 0 END AS behavioral\n FROM semantic.ambulance_runs WHERE\
+    \ entity_id IS NOT NULL) AS amb\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    count:
+      type: zero_noflag
+    sum:
+      type: zero_noflag
+  aggregates:
+  - quantity:
+      runs: '*'
+    metrics:
+    - count
+  - quantity: behavioral
+    metrics:
+    - sum
+  intervals:
+  - 1year
+  - all
+  groups:
+  - entity_id
+- prefix: ambbeh
+  from_obj: "(SELECT entity_id, incident_ts::date AS knowledge_date\n FROM semantic.ambulance_runs\n\
+    \ WHERE entity_id IS NOT NULL\n   AND primary_impression ILIKE ANY (ARRAY['%BEHAV%','%PSYCH%','%SUICID%']))\
+    \ AS ambbeh\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    min:
+      type: constant
+      value: 99999
+  aggregates:
+  - quantity:
+      days_since: '''{collate_date}''::date - knowledge_date'
+    metrics:
+    - min
+  intervals:
+  - 1year
+  - all
+  groups:
+  - entity_id
+- prefix: risk
+  from_obj: "(SELECT entity_id, GREATEST(assessment_date, created_date) AS knowledge_date,\n\
+    \        COALESCE(total_score, score) AS lsir_score,\n        NULL::int AS pretrial_risk,\
+    \ NULL::int AS pretrial_mh\n FROM semantic.lsir\n WHERE entity_id IS NOT NULL\
+    \ AND GREATEST(assessment_date, created_date) IS NOT NULL\n UNION ALL\n SELECT\
+    \ entity_id, create_date, NULL, risk_level_int, assessment_mh_flag\n FROM semantic.pretrial\
+    \ WHERE entity_id IS NOT NULL) AS risk\n"
+  knowledge_date_column: knowledge_date
+  aggregates_imputation:
+    max:
+      type: mean
+  aggregates:
+  - quantity: lsir_score
+    metrics:
+    - max
+  - quantity: pretrial_risk
+    metrics:
+    - max
+  - quantity: pretrial_mh
+    metrics:
+    - max
+  intervals:
+  - 3years
+  - all
+  groups:
+  - entity_id
+scoring:
+  testing_metric_groups:
+  - metrics:
+    - precision@
+    - recall@
+    thresholds:
+      top_n:
+      - 50
+      - 100
+      - 200
+      percentiles:
+      - 1
+      - 5
+      - 10
+  training_metric_groups:
+  - metrics:
+    - precision@
+    - recall@
+    thresholds:
+      top_n:
+      - 100
+individual_importance:
+  methods: []
+  n_ranks: 1
+grid_config:
+  sklearn.dummy.DummyClassifier:
+    strategy:
+    - prior
+  triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature:
+    rules:
+    - - feature: jail_entity_id_all_is_new_arrest_sum
+        low_value_high_score: false
+  triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression:
+    C:
+    - 1
+    penalty:
+    - l1
+    solver:
+    - saga
