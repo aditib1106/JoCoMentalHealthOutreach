@@ -1,13 +1,13 @@
 # ===================================================================
-# Jail MH 2  Project Update 5 config
-# Base: update4-baselines/step3_triage/mcrt_triage_config.yaml
-# U5 changes: deliberate imputation, 2 new baselines, 5 new features,
-#             small model grid inlined for v0 ML runs.
+# Jail MH 2  Project Update 6 config
+# Base: update5-feedback-fixes/step3_triage/mcrt_triage_config.yaml
+# U6 changes: inline resolved "medium" preset from model_grid_presets.yaml
+#             (prev-chain: quickstart -> small -> medium, union-merged).
+#             All other sections unchanged from U5 feedback-fix.
 # ===================================================================
 
 config_version: 'v8'
-# model_comment: 'jail_mh2_update5_v0_models'   # [U5] identifies this run in triage_metadata.models
-model_comment: 'jail_mh2_update5_feedback_fix'   # feedback meeting corrections applied
+model_comment: 'jail_mh2_update6_medium'   # [U6] new experiment hash for medium grid run
 
 
 # ---------- TEMPORAL CONFIG ----------
@@ -106,7 +106,6 @@ feature_aggregations:
     aggregates_imputation:
       count: {type: 'zero_noflag'}
       sum:   {type: 'zero_noflag'}
-#      max:   {type: 'mean'}
       max:   {type: 'constant', value: 0}   # updated per feedback meeting: binary/derived max imputes to 0 with flag, not mean
       min:   {type: 'mean'}
       avg:   {type: 'mean'}
@@ -159,7 +158,6 @@ feature_aggregations:
     aggregates:
       - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
         metrics: ['min']
-#    intervals: ['1year', '3years', 'all']
     intervals: ['all']   # updated per feedback meeting: intervals redundant for days_since
     groups: ['entity_id']
 
@@ -272,7 +270,6 @@ feature_aggregations:
     # Updated per feedback meeting: max imputes to 0 with flag (matches spreadsheet).
     # The _imp column gives ML the missingness signal; baseline rankers see the 0.
     aggregates_imputation:
-#      max: {type: 'mean'}
       max: {type: 'constant', value: 0}   # updated per feedback meeting
     aggregates:
       - quantity: 'lsir_score'
@@ -293,7 +290,6 @@ scoring:
     - metrics: [precision@, recall@]
       thresholds:
         top_n: [50, 100, 200]
-#        percentiles: [1, 5, 10]
         percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
                       11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
                       21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
@@ -316,51 +312,67 @@ individual_importance:
 
 
 # ---------- MODEL GRID ----------
-# U5 scope: Dummy prior, 4 rule based baselines, and a small ML grid
-# (LR, DT, RF). Focus is correctness end to end, not performance.
+# [U6] Resolved "medium" preset from model_grid_presets.yaml.
+# prev-chain: quickstart -> small -> medium, union-merged per estimator.
+# Dummy + 4 common-sense baselines kept from U5.
+# Expansion: LR 14 + DT 112 + RF 120 + AdaBoost 3 + ExtraTrees 36
+#            + Dummy 1 + baselines 4 = 290 model groups x 30 splits ~ 8,700 models.
 grid_config:
 
   # Base rate. The "do nothing" floor.
   'sklearn.dummy.DummyClassifier':
     strategy: ['prior']
 
-  # Common sense baselines. All rank by a single feature (plus optional tiebreak).
+  # Common-sense baselines (kept from U5). NOT in the presets file.
   'triage.component.catwalk.baselines.rankers.BaselineRankMultiFeature':
     rules:
-      # Baseline 1 (from U4). Highest BJMHS screen score.
+      # B1: highest BJMHS screen score
       - [{feature: 'jail_entity_id_all_mhs_total_max', low_value_high_score: False}]
-      # Baseline 2 (from U4, now with corrected imputation). Highest LSI R,
-      # pretrial_risk as tiebreak.
+      # B2: highest LSI-R, pretrial_risk as tiebreak
       - [{feature: 'risk_entity_id_all_lsir_score_max', low_value_high_score: False},
          {feature: 'risk_entity_id_all_pretrial_risk_max', low_value_high_score: False}]
-      # [U5] Baseline 3 NEW. Longest cumulative time in jail. Classic criminal
-      # justice "prior involvement" proxy. Uses plain string quantity so the
-      # column name follows the pattern that already validated in U4.
+      # B3: longest cumulative time in jail
       - [{feature: 'jail_entity_id_all_stay_days_sum', low_value_high_score: False}]
-      # [U5] Baseline 4 NEW. Most prior same type (new arrest) bookings.
-      # Lets us separate "ML is smart" from "the right information wins".
+      # B4: most prior same-type (new arrest) bookings
       - [{feature: 'jail_entity_id_all_is_new_arrest_sum', low_value_high_score: False}]
 
-  # Logistic regression. Triage's ScaledLogisticRegression standardizes features.
-  # Small sweep over C.
+  # ===== MEDIUM PRESET (resolved from model_grid_presets.yaml) =====
+
+  # LR = quickstart {C:[1], saga, l1} UNION small {C sweep, l2}
   'triage.component.catwalk.estimators.classifiers.ScaledLogisticRegression':
-    C: [0.01, 1]
-    penalty: ['l1']
+    C: [1, 0.00001, 0.0001, 0.001, 0.01, 0.1, 10]
+    penalty: ['l1', 'l2']
     solver: ['saga']
 
-  # Shallow decision trees. depth=1 is a stump (readable), depth=5 adds nonlinearity.
+  # DT = quickstart {depth 1} UNION small {deeper depths, more leaf/split combos}
   'sklearn.tree.DecisionTreeClassifier':
     criterion: ['gini']
-    max_depth: [1, 5]
-    min_samples_split: [25]
-    min_samples_leaf: [0.025]
+    max_depth: [1, null, 2, 5, 10, 50, 100]
+    min_samples_split: [25, 2, 10, 50]
+    min_samples_leaf: [0.025, 0.01, 0.05, 0.10]
 
-  # One small random forest for the "small preset" minimum. Scale up later.
+  # RF = small {50 trees} UNION medium {10..5000 trees, log2}
   'sklearn.ensemble.RandomForestClassifier':
-    n_estimators: [50]
-    max_depth: [5]
-    max_features: ['sqrt']
-    min_samples_split: [10]
+    n_estimators: [50, 10, 100, 1000, 5000]
+    max_depth: [5, null, 2, 10]
+    max_features: ['sqrt', 'log2']
+    min_samples_split: [10, 2, 25]
     criterion: ['gini']
+    random_state: [2193]
+    n_jobs: [-1]
+
+  # AdaBoost = medium (new in U6)
+  'sklearn.ensemble.AdaBoostClassifier':
+    algorithm: ['SAMME']
+    n_estimators: [5, 10, 100]
+
+  # ExtraTrees = medium (new in U6)
+  'sklearn.ensemble.ExtraTreesClassifier':
+    n_estimators: [100, 1000]
+    criterion: ['gini']
+    max_depth: [5, 10, null]
+    max_features: ['sqrt']
+    min_samples_split: [2, 10]
+    min_samples_leaf: [0.01, 0.025, 0.10]
     random_state: [2193]
     n_jobs: [-1]
