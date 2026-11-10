@@ -6,8 +6,8 @@
 # ===================================================================
 
 config_version: 'v8'
-model_comment: 'jail_mh2_update5_v0_models'   # [U5] identifies this run in triage_metadata.models
-random_seed: 23895478
+# model_comment: 'jail_mh2_update5_v0_models'   # [U5] identifies this run in triage_metadata.models
+model_comment: 'jail_mh2_update5_feedback_fix'   # feedback meeting corrections applied
 
 
 # ---------- TEMPORAL CONFIG ----------
@@ -106,7 +106,8 @@ feature_aggregations:
     aggregates_imputation:
       count: {type: 'zero_noflag'}
       sum:   {type: 'zero_noflag'}
-      max:   {type: 'mean'}
+#      max:   {type: 'mean'}
+      max:   {type: 'constant', value: 0}   # updated per feedback meeting: binary/derived max imputes to 0 with flag, not mean
       min:   {type: 'mean'}
       avg:   {type: 'mean'}
     aggregates:
@@ -132,6 +133,8 @@ feature_aggregations:
       # [U5] Age proxy. birth_year is constant per entity; MAX returns it.
       - quantity: 'birth_year'
         metrics: ['max']
+        imputation:
+          max: {type: 'mean'}   # keep mean here, a year of 0 would be nonsense
       # Days since last booking. KEY FIX from U4: constant 99999 not 0.
       # Zero means "today", which is the opposite of "never seen".
       - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
@@ -156,7 +159,8 @@ feature_aggregations:
     aggregates:
       - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
         metrics: ['min']
-    intervals: ['1year', '3years', 'all']
+#    intervals: ['1year', '3years', 'all']
+    intervals: ['all']   # updated per feedback meeting: intervals redundant for days_since
     groups: ['entity_id']
 
   # ===== JCMHC SERVICES block =====
@@ -265,12 +269,11 @@ feature_aggregations:
        SELECT entity_id, create_date, NULL, risk_level_int, assessment_mh_flag
        FROM semantic.pretrial WHERE entity_id IS NOT NULL) AS risk
     knowledge_date_column: 'knowledge_date'
-    # [U5] KEY FIX: was 'zero'. A NULL pretrial_risk for an LSI R only person
-    # was being imputed to 0, which the Baseline 2 tiebreak then read as
-    # "lowest pretrial risk" instead of "unknown". Switching to 'mean' plus
-    # the auto _imp flag fixes that misordering.
+    # Updated per feedback meeting: max imputes to 0 with flag (matches spreadsheet).
+    # The _imp column gives ML the missingness signal; baseline rankers see the 0.
     aggregates_imputation:
-      max: {type: 'mean'}
+#      max: {type: 'mean'}
+      max: {type: 'constant', value: 0}   # updated per feedback meeting
     aggregates:
       - quantity: 'lsir_score'
         metrics: ['max']
@@ -290,7 +293,17 @@ scoring:
     - metrics: [precision@, recall@]
       thresholds:
         top_n: [50, 100, 200]
-        percentiles: [1, 5, 10]
+#        percentiles: [1, 5, 10]
+        percentiles: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                      11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                      21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                      31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+                      41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+                      51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+                      61, 62, 63, 64, 65, 66, 67, 68, 69, 70,
+                      71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+                      81, 82, 83, 84, 85, 86, 87, 88, 89, 90,
+                      91, 92, 93, 94, 95, 96, 97, 98, 99, 100]   # updated per feedback meeting: full 1-100 for PR-k curve
   training_metric_groups:
     - metrics: [precision@, recall@]
       thresholds:
