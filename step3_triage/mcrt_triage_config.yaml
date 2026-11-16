@@ -3,11 +3,15 @@
 # Base: update5-feedback-fixes/step3_triage/mcrt_triage_config.yaml
 # U6 changes: inline resolved "medium" preset from model_grid_presets.yaml
 #             (prev-chain: quickstart -> small -> medium, union-merged).
-#             All other sections unchanged from U5 feedback-fix.
+# U6 feedback (post-meeting) applied:
+#   - birth_year moved to its own block with interval ['all'] only
+#     (previously 4 near-duplicate features under jail block).
+#   - birth_year aggregated with 'avg' (mean) instead of 'max', since
+#     bookings for one entity can carry different birthdates.
 # ===================================================================
 
 config_version: 'v8'
-model_comment: 'jail_mh2_update6_medium'   # [U6] new experiment hash for medium grid run
+model_comment: 'jail_mh2_update6_feedback'   # [U6] birth_year as its own block, mean not max
 
 
 # ---------- TEMPORAL CONFIG ----------
@@ -78,7 +82,9 @@ feature_aggregations:
   # ===== JAIL block =====
   # Source: semantic.bookings. One row per booking event.
   # [U5] from_obj rewritten: LAG for prev_gap_days, JOIN booking_types
-  #      for is_new_arrest flag, exposes birth_year for age proxy.
+  #      for is_new_arrest flag.
+  # [U6] birth_year removed from this block; moved to its own 'age' block
+  #      below with interval ['all'] only (per feedback meeting).
   -
     prefix: 'jail'
     from_obj: |
@@ -93,9 +99,7 @@ feature_aggregations:
                    OVER (PARTITION BY b.entity_id ORDER BY b.booking_date))::int AS prev_gap_days,
               -- [U5] 1 if this booking matches the label event types (new arrest).
               -- Lets us build a baseline that ranks on prior same type events.
-              CASE WHEN t.book_types && ARRAY['VIEW','WARR','BW'] THEN 1 ELSE 0 END AS is_new_arrest,
-              -- [U5] birth_year is constant per entity; MAX gives the year itself.
-              b.birth_year
+              CASE WHEN t.book_types && ARRAY['VIEW','WARR','BW'] THEN 1 ELSE 0 END AS is_new_arrest
        FROM semantic.bookings b
        LEFT JOIN semantic.booking_types t USING (booking_no)
        WHERE b.entity_id IS NOT NULL) AS jail
@@ -129,11 +133,6 @@ feature_aggregations:
         imputation:
           min: {type: 'constant', value: 99999}
           avg: {type: 'constant', value: 99999}
-      # [U5] Age proxy. birth_year is constant per entity; MAX returns it.
-      - quantity: 'birth_year'
-        metrics: ['max']
-        imputation:
-          max: {type: 'mean'}   # keep mean here, a year of 0 would be nonsense
       # Days since last booking. KEY FIX from U4: constant 99999 not 0.
       # Zero means "today", which is the opposite of "never seen".
       - quantity: {days_since: "'{collate_date}'::date - knowledge_date"}
@@ -142,6 +141,32 @@ feature_aggregations:
           min: {type: 'constant', value: 99999}
     # [U5] Added '6months' for recency signal.
     intervals: ['6months', '1year', '3years', 'all']
+    groups: ['entity_id']
+
+  # ===== AGE block (birth_year) =====
+  # [U6] Moved out of the jail block per feedback meeting:
+  #   - A single feature, not 4 near-duplicates across intervals
+  #     (interval ['all']; same answer across 3m/6m/1y/all anyway).
+  #   - 'avg' (mean) rather than 'max', because a person's bookings
+  #     can carry different birthdates in the source; mean is more
+  #     robust than picking the largest year.
+  # Note: knowledge_date is the booking date, so only birthdates from
+  #       bookings before as_of_date are visible to the model.
+  -
+    prefix: 'age'
+    from_obj: |
+      (SELECT b.entity_id,
+              b.booking_date AS knowledge_date,
+              b.birth_year
+       FROM semantic.bookings b
+       WHERE b.entity_id IS NOT NULL AND b.birth_year IS NOT NULL) AS age
+    knowledge_date_column: 'knowledge_date'
+    aggregates_imputation:
+      avg: {type: 'mean'}   # cohort-mean birth_year when entity has no prior bookings with birth_year
+    aggregates:
+      - quantity: 'birth_year'
+        metrics: ['avg']
+    intervals: ['all']
     groups: ['entity_id']
 
   # [U5] NEW BLOCK. Days since last COMPLETED RELEASE.
