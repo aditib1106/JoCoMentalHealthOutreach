@@ -7,7 +7,7 @@ from triage.util.db import create_engine
 from triage.experiments import MultiCoreExperiment
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(HERE, 'mcrt_triage_config.yaml')
+CONFIG_PATH = os.path.join(HERE, 'mcrt_triage_config_medium.yaml')
 DB_CONFIG_PATH = os.path.expanduser('~/database.yaml')
 # Shared group output. Each run writes to its own timestamped subfolder so
 # teammates' runs don't overwrite each other. The folder exists with
