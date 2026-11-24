@@ -1,3 +1,5 @@
+
+
 # ===================================================================
 # Jail MH 2  Project Update 6 config
 # Base: update5-feedback-fixes/step3_triage/mcrt_triage_config.yaml
@@ -11,7 +13,7 @@
 # ===================================================================
 
 config_version: 'v8'
-model_comment: 'jail_mh2_update6_feedback'   # [U6] birth_year as its own block, mean not max
+model_comment: 'jail_mh2_update8_bias_audit'
 
 
 # ---------- TEMPORAL CONFIG ----------
@@ -334,6 +336,69 @@ scoring:
 individual_importance:
   methods: []
   n_ranks: 1
+
+
+bias_audit_config:
+
+  # ---- WHERE to read demographics from --------------------------------------
+  # semantic.bookings is one row per jail booking. aequitas handles the
+  # "latest row per entity_id up to the prediction date" semantics via the
+  # knowledge_date_column — we don't have to deduplicate manually. This also
+  # means the audit sees demographics *as of the model's prediction time*,
+  # not "today's" demographics — important because race/sex codes can change
+  # across bookings (data entry inconsistency) and we want the model's view.
+  from_obj_table: 'semantic.bookings'
+
+  # ---- WHICH columns to audit ----------------------------------------------
+  # Race and sex are the two protected attributes we're confident about:
+  #   - Both are legally protected classes in US anti-discrimination law.
+  #   - Both are large enough in the cohort (W+B cover ~99% of race; MALE+
+  #     FEMALE cover ~100% of sex) for reliable disparity ratios.
+  #   - Jail label is policing-shaped and policing is racially unequal, so a
+  #     race audit is non-optional for this project.
+  # Not auditing age (bucketing is arbitrary; add in Update 9 if the prof
+  # pushes), geography/income (not in the schema), or A/I/O race codes (too
+  # few people to produce signal, not noise).
+  attribute_columns: ['race', 'sex']
+
+  # ---- WHEN the demographic becomes "known" --------------------------------
+  # aequitas joins person-level audit rows to each prediction date using this
+  # column. For each (entity_id, prediction_date) it picks the most recent
+  # row where booking_date <= prediction_date. That's exactly how our model
+  # sees features — nothing from the future.
+  knowledge_date_column: 'booking_date'
+
+  # ---- HOW to join back to triage's entity_ids -----------------------------
+  # semantic.bookings carries entity_id directly (the person crosswalk was
+  # already applied upstream), so no join. If it didn't, we'd need a VIEW
+  # that joined cleaned.jocojimsinmatedata.mni_no -> semantic.person_xwalk
+  # -> entity_id.
+  entity_id_column: 'entity_id'
+
+  # ---- REFERENCE groups for disparity ratios -------------------------------
+  # Disparity = <metric for this group> / <metric for reference group>.
+  # 'predefined' lets us name the reference explicitly instead of letting
+  # aequitas auto-pick (lecture 18 slide 50 uses the predefined pattern).
+  # Why the majority group: it's the group the model's precision/recall is
+  # most statistically tuned for (largest N), so disparity against it
+  # isolates how the minority group's outcome differs from the best-sampled
+  # case. Using "lowest metric" as reference would artificially shrink
+  # disparity ratios and hide real inequities.
+  ref_groups_method: 'predefined'
+  ref_groups:
+    race: 'W'      # 25,580 of ~29,000 eligible people
+    sex:  'MALE'   # 19,919 of 29,335 eligible people
+                   # NOTE exact string 'MALE' — not 'M', not 'Male'.
+
+  # ---- AT WHAT threshold -----------------------------------------------
+  # top_n=100 matches JCMHC's actual monthly outreach capacity and the
+  # precision@100 metric we chose models on in Update 7. Auditing at the
+  # deployment threshold is the honest audit — not 1%, 5%, 10%. If the prof
+  # pushes for sensitivity analysis, adding more values is cheap:
+  #   top_n: [50, 100, 200]
+  # but keeps the Update 8 scope tight.
+  thresholds:
+    top_n: [100]
 
 
 # ---------- MODEL GRID ----------
