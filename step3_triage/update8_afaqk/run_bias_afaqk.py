@@ -11,8 +11,7 @@ from sqlalchemy.engine.url import URL
 from triage.util.db import create_engine
 from triage.experiments import MultiCoreExperiment
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(HERE, 'mcrt_triage_config_afaqk.yaml')
+CONFIG_PATH = '/class/groups/jail_mh2/step3_triage/mcrt_triage_config_afaqk.yaml'
 DB_CONFIG_PATH = os.path.expanduser('~/database.yaml')
 
 # Point at the EXISTING run directory that holds the 330 RF pickles + matrices.
@@ -52,7 +51,10 @@ def main():
         port=db['port'],
         database='johnson_county_ddj_jail_mh2',
     )
-    engine = create_engine(url, connect_args={'options': '-c enable_nestloop=off'})
+    # SET ROLE jail_mh2 so any tables triage creates (protected_groups_*, labels_*)
+    # are owned by the team role and any teammate can use them.
+    engine = create_engine(url, connect_args={
+        'options': '-c enable_nestloop=off -c role=jail_mh2'})
 
     print(f'[{datetime.now():%H:%M:%S}] reusing run dir: {EXISTING_RUN_DIR}')
     experiment = MultiCoreExperiment(

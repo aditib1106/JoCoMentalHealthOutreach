@@ -1,41 +1,43 @@
-# Update 8 — Afaq's complementary fairness audit
+# Update 8 — Bias and fairness audit of the RF extremes run
 
-Companion to Vidhi's `step3_triage/export_aequitas.py` + `mcrt_triage_config_medium.yaml` `bias_audit_config`. Both target the same deliverable, but take different paths and cover different model sets.
+Audits the Update 7 RF-only extremes sweep (330 models, 11 model groups) with triage's built-in aequitas tool, as the deliverable asks. Produces the four scatter plots (TPR and FDR disparity vs precision@100, for Black/White and Female/Male) on the last validation list (2018-06-01).
 
-## What's here
+## How to run
 
-| File | What it does |
+```bash
+# 1. Run the audit. Reuses the existing RF run dir, so no retraining.
+#    Takes ~20-40 min. Watch step3_triage/update8_afaqk/logs/audit.log.
+python step3_triage/update8_afaqk/run_bias_afaqk.py
+
+# 2. Plot from test_results.aequitas.
+python step3_triage/update8_afaqk/fairness_plots.py
+```
+
+## Files
+
+| File | Purpose |
 |---|---|
-| `fairness_from_predictions.py` | Computes precision@100, TPR and FDR per race/sex group directly from `test_results.predictions` joined to `semantic.bookings`. **Read-only, no triage, no retraining.** |
-| `run_bias_afaqk.py` | Aequitas fallback for models without stored predictions. Injects `bias_audit_config` into Afaq's RF config and points at the existing RF run dir so pickles are reused. |
-| `exports/disparities.csv` | Per-model group counts, TPR/FDR per group, disparity ratios. Source of truth for the plots. |
-| `exports/*.png` | Four scatter plots: TPR and FDR disparity vs precision@100, for Black/White and Female/Male. |
+| `run_bias_afaqk.py` | Injects `bias_audit_config` (race, sex, top_n=100) into `mcrt_triage_config_afaqk.yaml` and runs triage with `project_path` pointed at the existing RF run dir so the 330 trained pickles are reused. Writes rows to `test_results.aequitas`. |
+| `fairness_plots.py` | Reads `test_results.aequitas` joined to `test_results.evaluations` for the 2018-06-01 validation list and writes four PNGs + one CSV. |
+| `exports/disparities.csv` | Long-format audit table: one row per `(model_group, attribute, value)`. |
+| `exports/*.png` | The four scatter plots for slide 26 of the Update 8 deck. |
+| `logs/audit.log` | Audit progress log (expect many "Skipping matrix because already exists" lines — that's the pickle reuse we want). |
 
-## Which models this covers
+## Design choices (locked, per team plan)
 
-10 models that have per-person predictions stored in `test_results.predictions` on **2018-06-01**:
+| Choice | Decision | Why |
+|---|---|---|
+| Attributes | race, sex | Policy-salient, available on every entity via `semantic.bookings` |
+| Reference groups | White (race), Male (sex) | Predefined, majority group |
+| Primary metric | **TPR / recall parity** | Fairness tree: assistive intervention + small fraction → recall parity |
+| Secondary diagnostic | FDR | Measures how outreach slots are spent; not a second fairness objective |
+| Threshold | top_n = 100 | JCMHC monthly outreach capacity |
+| Model selection | Pareto frontier (precision@100 vs TPR disparity) | Course lecture explicitly recommends this over hard thresholds |
 
-- `jail_mh2_update7_focus` (6 models): LR champion **mg 41** (C=0.1, L2), alternate **mg 30** (C=1, L1), + mg 31 / 40 variants, Dummy mg 25, baseline mg 29.
-- `jail_mh2_u5_mini_prk` (4 models): RF **mg 24**, LR mg 22, Dummy mg 20, baseline mg 21.
+## Critical caveat (first-class)
 
-Does **not** cover the 330 Afaq RF-extremes models (no stored predictions) or the 7,247 Aditi medium-grid models. For those, Vidhi's triage/aequitas path is the way — see note below.
+Our label is **observed jail rebooking following a new arrest**, not a direct measure of criminal behavior or mental-health need. Because the label is mediated by policing, observed TPR disparity may reflect upstream differences in the label as well as model behavior. Disparity is diagnostic; it does not prove the model is biased.
 
-## Why two paths
+## One gotcha we hit (for the team record)
 
-Different models have predictions saved (vs not), so no single approach covers everything cheaply:
-
-- **Stored predictions** → compute fairness math by hand, instant, transparent. (This folder.)
-- **No stored predictions** → need triage to re-evaluate with `bias_audit_config` and `replace=False`. The audit populates `test_results.aequitas`. (Vidhi's `export_aequitas.py`.)
-
-**Important gotcha** we hit: `run.py` / `run_afaqk.py` create a new timestamped `project_path` on every invocation, so the audit launched that way finds zero pickles and retrains from scratch. Fix: point `project_path` at the **existing** run directory. `run_bias_afaqk.py` encodes this for the RF dir; the same fix is needed for the medium-grid audit (point at `triage_runs_v2/20261116_205916_afaqk/`).
-
-## Headline numbers (2018-06-01, top-100)
-
-| mg | model | prec@100 | race TPR disp (B/W) | sex TPR disp (F/M) | race FDR disp | sex FDR disp |
-|----|-------|---------|------|------|------|------|
-| 41 | **LR champion** C=0.1 L2 | 0.69 | **1.03** | 0.89 | 0.68 | 1.11 |
-| 30 | LR alternate C=1 L1    | 0.68 | 0.97 | 1.13 | 0.57 | 1.22 |
-| 24 | Random forest          | 0.58 | 1.00 | 1.66 | 0.58 | 0.91 |
-| 29 | Baseline prior-arrest  | 0.43 | 0.83 | 0.49 | 1.00 | 0.93 |
-
-1.0 = parity. Dummy excluded from plots (constant score → random top-100). Only ~20 Black people and ~27 women in each top-100 — one or two people swing a ratio. Label is jail rebooking, so disparity ≠ proven model bias (see plan.md).
+`run_afaqk.py` (and `run.py`) always mint a new timestamped `project_path`, so an audit launched that way finds zero pickles and retrains everything. `run_bias_afaqk.py` fixes this by pointing `project_path` at the existing `triage_runs_v2/20261118_191929_afaqk_rf` directory. Same fix would apply to an audit of Aditi's medium grid (point at `triage_runs_v2/20261116_205916_afaqk/`).
