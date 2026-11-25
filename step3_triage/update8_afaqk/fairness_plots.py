@@ -32,8 +32,12 @@ def get_engine():
 
 
 def load(engine, attribute_name, attribute_value):
+    # The audit retrains baselines/dummy with new model_ids, so a model_group can
+    # have more than one row per date -- take the newest (highest model_id) per group.
     q = text("""
-        SELECT m.model_group_id,
+        SELECT DISTINCT ON (m.model_group_id)
+               m.model_group_id,
+               m.model_id,
                m.model_type,
                a.tpr, a.tpr_disparity, a.fdr, a.fdr_disparity, a.group_size,
                e.stochastic_value AS precision_at_100
@@ -48,6 +52,7 @@ def load(engine, attribute_name, attribute_value):
           AND a.parameter = :thr
           AND a.attribute_name = :attr
           AND a.attribute_value = :val
+        ORDER BY m.model_group_id, m.model_id DESC
     """)
     return pd.read_sql(q, engine, params={
         'mc': MODEL_COMMENT, 'thr': THRESHOLD, 'eval_date': EVAL_DATE,
